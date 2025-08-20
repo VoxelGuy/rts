@@ -39,25 +39,25 @@
 <body>
   <div id="ui">
     <div class="hud">
-      <span class="pill" id="res-pill">💎 <span id="res">0</span></span>
-      <span class="pill">🏭 <span id="basehp">100</span>%</span>
+      <span class="pill" id="res-pill">🧀 <span id="res">0</span></span>
+      <span class="pill">🏡 <span id="basehp">100</span>%</span>
       <span class="sep"></span>
-      <span class="pill">👷 <span id="workers">0</span></span>
-      <span class="pill">🗡️ <span id="soldiers">0</span></span>
-      <span class="pill">🧱 <span id="shields">0</span></span>
+      <span class="pill">🐭 <span id="workers">0</span></span>
+      <span class="pill">🐹 <span id="soldiers">0</span></span>
+      <span class="pill">🐼 <span id="shields">0</span></span>
       <span class="sep"></span>
       <span class="pill" title="Zoom molette · Déplacement ZQSD">⚙️ v1.4</span>
     </div>
 
     <div class="panel">
-      <button id="btnWorker">👷 Ouvrier <span class="cost">50💎</span></button>
-      <button id="btnSoldier">🗡️ Soldat <span class="cost">75💎</span></button>
-      <button id="btnShield">🧱 Bouclier <span class="cost">90💎</span></button>
+      <button id="btnWorker">🐭 Ouvrier <span class="cost">50🧀</span></button>
+      <button id="btnSoldier">🐹 Soldat <span class="cost">75🧀</span></button>
+      <button id="btnShield">🐼 Bouclier <span class="cost">90🧀</span></button>
       <button id="btnRally">📍 Ralliement</button>
     </div>
 
     <div class="help">
-      <b>Contrôles</b> — Sélection: clic ou glisser pour boîte. Ordres: clic droit (déplacer / miner 💎 / attaquer). Déplacement caméra: ZQSD. Molette: zoom. Raccourcis: <b>W</b>=Ouvrier, <b>S</b>=Soldat, <b>B</b>=Bouclier.
+      <b>Contrôles</b> — Sélection: clic ou glisser pour boîte. Ordres: clic droit (déplacer / miner 🧀 / attaquer). Déplacement caméra: ZQSD. Molette: zoom. Raccourcis: <b>W</b>=Ouvrier, <b>S</b>=Soldat, <b>B</b>=Bouclier.
     </div>
 
     <div class="toast" id="toast"></div>
@@ -86,7 +86,7 @@
   class Mineral {
     constructor(scene, x, y, amount=500){
       this.scene=scene; this.x=x; this.y=y; this.amount=amount; this.dead=false;
-      this.text = scene.add.text(x, y, '💎', { fontSize: 28 }).setOrigin(0.5).setDepth(1);
+      this.text = scene.add.text(x, y, '🧀', { fontSize: 28 }).setOrigin(0.5).setDepth(1);
     }
     take(n){ const t = Math.min(this.amount, n); this.amount -= t; if(this.amount<=0){ this.dead=true; this.text.setText(''); this.text.destroy(); } return t; }
   }
@@ -94,8 +94,7 @@
   class Base {
     constructor(scene, x, y, isPlayer){
       this.scene=scene; this.x=x; this.y=y; this.isPlayer=isPlayer; this.maxHp=1000; this.hp=this.maxHp; this.dead=false; this.base=true;
-      const emoji = isPlayer ? '🏭' : '🏰';
-      this.teamCircle = scene.add.circle(x, y, 28, isPlayer?0x4477ff:0xff5555, 0.25).setDepth(0);
+      const emoji = isPlayer ? '🏡' : '🏰';
       this.text = scene.add.text(x, y, emoji, { fontSize: 48 }).setOrigin(0.5).setDepth(1);
       this.hpBar = scene.add.graphics().setDepth(2);
       this.updateHpBar();
@@ -108,16 +107,17 @@
       this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b, 1).fillRoundedRect(this.x-30, this.y+34, 60*pct, 8, 3);
       if(this.isPlayer && this === this.scene.playerBase) ui.basehp.textContent = Math.round(pct*100);
     }
-    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0 && !this.dead){ this.dead=true; this.text.setText('💥'); if(this.teamCircle) this.teamCircle.setVisible(false); this.scene.onBaseDestroyed(this); } }
+    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0 && !this.dead){ this.dead=true; this.text.setText('💥'); this.scene.onBaseDestroyed(this); } }
   }
 
   class Unit {
     constructor(scene, x, y, opts){
       this.scene=scene; Object.assign(this, { x, y, isPlayer:true, type:'worker', speed:95, range:42, atk:8, cooldown:500, hp:80, maxHp:80 }, opts);
       this.vx=0; this.vy=0; this.order=null; this.target=null; this.carry=0; this.cap=20; this.gathering=false; this._cd=0; this._seek=0;
-      const emojiMap = { worker:'👷', soldier:'🗡️', shield:'🧱' };
+      const emojiMapPlayer = { worker:'🐭', soldier:'🐹', shield:'🐼' };
+      const emojiMapEnemy = { worker:'🐭', soldier:'😼', shield:'🐻' };
+      const emojiMap = this.isPlayer ? emojiMapPlayer : emojiMapEnemy;
       const fs = this.type==='soldier' ? 30 : 28;
-      this.teamCircle = scene.add.circle(x, y, 14, this.isPlayer?0x4477ff:0xff5555, 0.25).setDepth(1);
       this.text = scene.add.text(x, y, emojiMap[this.type]||'🙂', { fontSize: fs }).setOrigin(0.5).setDepth(3);
       if(this.type==='worker'){
         this.carryText = scene.add.text(x, y-18, '', {fontSize:18}).setOrigin(0.5).setDepth(4);
@@ -129,7 +129,7 @@
     drawRing(){ this.selRing.clear(); if(!this.selected) return; this.selRing.lineStyle(2, 0x7c9cff, 1).strokeCircle(this.x, this.y, 18); }
     updateHpBar(){ const pct = Math.max(0, this.hp/this.maxHp); this.hpBar.clear(); this.hpBar.fillStyle(0x000000,0.7).fillRect(this.x-16,this.y+18,32,5); this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b).fillRect(this.x-16,this.y+18,32*pct,5); }
     damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0) this.destroy(); }
-    destroy(){ this.text.destroy(); if(this.carryText) this.carryText.destroy(); this.selRing.destroy(); this.hpBar.destroy(); if(this.teamCircle) this.teamCircle.destroy(); this.dead=true; }
+    destroy(){ this.text.destroy(); if(this.carryText) this.carryText.destroy(); this.selRing.destroy(); this.hpBar.destroy(); this.dead=true; }
     moveTo(tx, ty){ this.order={kind:'move', x:tx, y:ty}; this.target=null; this.gathering=false; }
     attack(t, manual=false){ if(!hasDamage(t)){ this.order=null; this.target=null; return; } this.order={kind:'attack', manual}; this.target=t; this.gathering=false; }
     harvest(mineral){ if(this.type!=='worker') return; this.order={kind:'harvest', m:mineral}; this.target=null; this.gathering=false; }
@@ -177,8 +177,7 @@
       // integrate position
       this.x += this.vx*dt/1000; this.y += this.vy*dt/1000;
       this.text.setPosition(this.x, this.y);
-      if(this.teamCircle) this.teamCircle.setPosition(this.x, this.y);
-      if(this.carryText){ this.carryText.setPosition(this.x, this.y-18); this.carryText.setText(this.carry>0?'💎':''); }
+      if(this.carryText){ this.carryText.setPosition(this.x, this.y-18); this.carryText.setText(this.carry>0?'🧀':''); }
       this.drawRing(); this.updateHpBar();
     }
     _goTo(tx,ty,dt){ const dx=tx-this.x, dy=ty-this.y; const d=Math.hypot(dx,dy); if(d<6){ this.vx=this.vy=0; return; } const nx=dx/d, ny=dy/d; this.vx=nx*this.speed; this.vy=ny*this.speed; }
@@ -228,7 +227,6 @@
       for(let i=0;i<3;i++) this.spawnUnit(true,'worker', this.playerBase.x+60+i*28, this.playerBase.y+40);
 
       // Input & selection
-      this.hitboxG = this.add.graphics().setDepth(1);
       this.selected = []; this.selG = this.add.graphics().setDepth(10); this.dragSel=null;
       this.input.on('pointerdown', (p)=>{
         const world = this.toWorld(p);
@@ -274,7 +272,7 @@
 
       const tryBuy = (kind)=>{
         const cost = COSTS[kind];
-        if(this.playerMinerals < cost){ ui.showToast('Pas assez de 💎'); return; }
+        if(this.playerMinerals < cost){ ui.showToast('Pas assez de 🧀'); return; }
         this.playerMinerals -= cost; this.updateHud();
         const spawnX=this.playerBase.x+Phaser.Math.Between(20,40), spawnY=this.playerBase.y+Phaser.Math.Between(-30,30);
         const u = this.spawnUnit(true, kind, spawnX, spawnY);
@@ -314,11 +312,6 @@
       this.units = this.units.filter(u=>!u.dead);
       this.enemyUnits = this.enemyUnits.filter(u=>!u.dead);
       this.minerals = this.minerals.filter(m=>!m.dead);
-      // draw hitboxes
-      this.hitboxG.clear();
-      const draw = (u,color)=>{ this.hitboxG.lineStyle(1,color,0.3).strokeCircle(u.x,u.y,12); this.hitboxG.lineStyle(1,color,0.15).strokeCircle(u.x,u.y,u.range); };
-      this.units.forEach(u=>draw(u,0x00ff00));
-      this.enemyUnits.forEach(u=>draw(u,0xff0000));
       // HUD counts
       ui.workers.textContent = this.units.filter(u=>u.type==='worker').length;
       ui.soldiers.textContent = this.units.filter(u=>u.type==='soldier').length;
