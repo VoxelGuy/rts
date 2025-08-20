@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="fr" oncontextmenu="event.preventDefault()">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mini RTS Emoji — Phaser 3 (v1.4)</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.min.js"></script>
+  <style>
+    :root {
+      --bg: #0e1220;
+      --panel: #141a30cc;
+      --muted: #9aa4c2;
+      --text: #e7ecff;
+      --accent: #7c9cff;
+      --good: #00d1b2;
+      --danger: #ff6b6b;
+      --warn: #ffb020;
+    }
+    html, body { height:100%; margin:0; background: radial-gradient(1000px 600px at 20% 10%, #1a2240 0%, #0e1220 60%); color:var(--text); font-family: Inter, system-ui, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; overflow:hidden; }
+    #ui { position:fixed; inset:0; pointer-events:none; }
+    .hud { position:absolute; left:12px; top:12px; display:flex; gap:10px; align-items:center; background:var(--panel); backdrop-filter: blur(10px); border:1px solid #2a3560; border-radius:16px; padding:10px 12px; pointer-events:auto; box-shadow:0 10px 30px #0006; }
+    .hud .pill { display:inline-flex; align-items:center; gap:8px; background:#1f2647; border:1px solid #2c3970; padding:6px 10px; border-radius:999px; font-weight:700; }
+    .hud .sep { width:1px; height:22px; background:#2a3560; margin:0 4px; }
+
+    .panel { position:absolute; right:12px; top:12px; display:flex; gap:8px; background:var(--panel); border:1px solid #2a3560; backdrop-filter: blur(10px); padding:10px; border-radius:16px; pointer-events:auto; box-shadow:0 10px 30px #0006; }
+    .panel button { cursor:pointer; border:1px solid #34407a; background:#222b57; color:var(--text); padding:10px 12px; border-radius:12px; font-weight:700; letter-spacing:.2px; transition: transform .06s ease, background .2s ease; }
+    .panel button:hover { background:#273164; }
+    .panel button:active { transform: translateY(1px) scale(.98); }
+    .panel .cost { color:var(--muted); font-size:12px; font-weight:600; display:block; }
+
+    .help { position:absolute; left:12px; bottom:12px; max-width:520px; line-height:1.45; background:var(--panel); border:1px solid #2a3560; border-radius:14px; padding:10px 12px; pointer-events:auto; color:var(--muted); font-size:14px; }
+    .help b { color:var(--text); }
+
+    .toast { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:#111835ee; backdrop-filter: blur(8px); border:1px solid #2a3560; border-radius:20px; padding:18px 22px; font-size:22px; font-weight:800; letter-spacing:.3px; display:none; text-align:center; box-shadow:0 40px 80px #000a; }
+
+    canvas { outline:none; display:block; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="hud">
+      <span class="pill" id="res-pill">💎 <span id="res">0</span></span>
+      <span class="pill">🏭 <span id="basehp">100</span>%</span>
+      <span class="sep"></span>
+      <span class="pill">👷 <span id="workers">0</span></span>
+      <span class="pill">🗡️ <span id="soldiers">0</span></span>
+      <span class="pill">🧱 <span id="shields">0</span></span>
+      <span class="sep"></span>
+      <span class="pill" title="Zoom molette · Déplacement ZQSD">⚙️ v1.4</span>
+    </div>
+
+    <div class="panel">
+      <button id="btnWorker">👷 Ouvrier <span class="cost">50💎</span></button>
+      <button id="btnSoldier">🗡️ Soldat <span class="cost">75💎</span></button>
+      <button id="btnShield">🧱 Bouclier <span class="cost">90💎</span></button>
+      <button id="btnRally">📍 Ralliement</button>
+    </div>
+
+    <div class="help">
+      <b>Contrôles</b> — Sélection: clic ou glisser pour boîte. Ordres: clic droit (déplacer / miner 💎 / attaquer). Déplacement caméra: ZQSD. Molette: zoom. Raccourcis: <b>W</b>=Ouvrier, <b>S</b>=Soldat, <b>B</b>=Bouclier.
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script>
+  // --- Helpers UI ---
+  const $ = sel => document.querySelector(sel);
+  const ui = {
+    res: $('#res'),
+    basehp: $('#basehp'),
+    workers: $('#workers'),
+    soldiers: $('#soldiers'),
+    shields: $('#shields'),
+    toast: $('#toast'),
+    showToast(msg, ms=1600){ this.toast.textContent = msg; this.toast.style.display='block'; clearTimeout(this._t); this._t=setTimeout(()=>this.toast.style.display='none', ms); }
+  };
+
+  // Small type guard
+  const hasDamage = (o) => !!(o && typeof o.damage === 'function');
+
+  // --- Game constants ---
+  const MAP_W = 2400, MAP_H = 1600;
+  const COSTS = { worker:50, soldier:75, shield:90 };
+
+  class Mineral {
+    constructor(scene, x, y, amount=500){
+      this.scene=scene; this.x=x; this.y=y; this.amount=amount; this.dead=false;
+      this.text = scene.add.text(x, y, '💎', { fontSize: 28 }).setOrigin(0.5).setDepth(1);
+    }
+    take(n){ const t = Math.min(this.amount, n); this.amount -= t; if(this.amount<=0){ this.dead=true; this.text.setText(''); this.text.destroy(); } return t; }
+  }
+
+  class Base {
+    constructor(scene, x, y, isPlayer){
+      this.scene=scene; this.x=x; this.y=y; this.isPlayer=isPlayer; this.maxHp=1000; this.hp=this.maxHp; this.dead=false; this.base=true;
+      const emoji = isPlayer ? '🏭' : '🏰';
+      this.text = scene.add.text(x, y, emoji, { fontSize: 48 }).setOrigin(0.5).setDepth(1);
+      this.hpBar = scene.add.graphics().setDepth(2);
+      this.updateHpBar();
+      this.rally = new Phaser.Math.Vector2(x + (isPlayer?120:-120), y);
+    }
+    updateHpBar(){
+      const pct = Math.max(0, this.hp/this.maxHp);
+      this.hpBar.clear();
+      this.hpBar.fillStyle(0x000000, 0.6).fillRoundedRect(this.x-30, this.y+34, 60, 8, 3);
+      this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b, 1).fillRoundedRect(this.x-30, this.y+34, 60*pct, 8, 3);
+      if(this.isPlayer) ui.basehp.textContent = Math.round(pct*100);
+    }
+    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0 && !this.dead){ this.dead=true; this.text.setText('💥'); this.scene.onBaseDestroyed(this); } }
+  }
+
+  class Unit {
+    constructor(scene, x, y, opts){
+      this.scene=scene; Object.assign(this, { x, y, isPlayer:true, type:'worker', speed:95, range:42, atk:8, cooldown:500, hp:80, maxHp:80 }, opts);
+      this.vx=0; this.vy=0; this.order=null; this.target=null; this.carry=0; this.cap=20; this.gathering=false; this._cd=0; this._seek=0;
+      const emojiMap = { worker:'👷', soldier:'🗡️', shield:'🧱' };
+      const fs = this.type==='soldier' ? 30 : 28;
+      this.text = scene.add.text(x, y, emojiMap[this.type]||'🙂', { fontSize: fs }).setOrigin(0.5).setDepth(3);
+      this.selRing = scene.add.graphics().setDepth(2); this.selected=false; this.setSelected(false);
+      this.hpBar = scene.add.graphics().setDepth(2); this.updateHpBar();
+    }
+    setSelected(b){ this.selected=b; this.drawRing(); }
+    drawRing(){ this.selRing.clear(); if(!this.selected) return; this.selRing.lineStyle(2, 0x7c9cff, 1).strokeCircle(this.x, this.y, 18); }
+    updateHpBar(){ const pct = Math.max(0, this.hp/this.maxHp); this.hpBar.clear(); this.hpBar.fillStyle(0x000000,0.7).fillRect(this.x-16,this.y+18,32,5); this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b).fillRect(this.x-16,this.y+18,32*pct,5); }
+    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0) this.destroy(); }
+    destroy(){ this.text.destroy(); this.selRing.destroy(); this.hpBar.destroy(); this.dead=true; }
+    moveTo(tx, ty){ this.order={kind:'move', x:tx, y:ty}; this.target=null; this.gathering=false; }
+    attack(t){ if(!hasDamage(t)){ this.order=null; this.target=null; return; } this.order={kind:'attack'}; this.target=t; this.gathering=false; }
+    harvest(mineral){ if(this.type!=='worker') return; this.order={kind:'harvest', m:mineral}; this.target=null; this.gathering=false; }
+    update(dt){ if(this.dead) return; const s=this;
+      // move / pursue
+      if(s.order){
+        if(s.order.kind==='move'){
+          s._goTo(s.order.x, s.order.y, dt);
+        } else if(s.order.kind==='attack' && hasDamage(s.target) && !s.target.dead){
+          const dx=s.target.x-s.x, dy=s.target.y-s.y, dist=Math.hypot(dx,dy);
+          if(dist > s.range*0.85){ s._goTo(s.target.x, s.target.y, dt); } else { s.vx=s.vy=0; s._attackTick(dt, s.target); }
+        } else if(s.order.kind==='harvest'){
+          const m=s.order.m; if(!m || m.dead){ s.order=null; return; }
+          if(s.carry>=s.cap){ // return to base
+            const b=s.scene.playerBase; const dx=b.x-s.x, dy=b.y-s.y, dist=Math.hypot(dx,dy);
+            if(dist>24) s._goTo(b.x,b.y,dt); else { s.scene.addMinerals(s.carry); s.carry=0; }
+          } else {
+            const dx=m.x-s.x, dy=m.y-s.y, dist=Math.hypot(dx,dy);
+            if(dist>22){ s._goTo(m.x,m.y,dt); s.gathering=false; }
+            else { s.vx=s.vy=0; // gather
+              if(!s.gathering){ s.gathering=true; s._gatherT=0; }
+              s._gatherT += dt; if(s._gatherT>800){ s._gatherT=0; s.carry += m.take(5); if(m.dead) s.order=null; }
+            }
+          }
+        }
+      }
+      // auto-acquire / retargeting — priorité aux unités proches
+      this._seek += dt; if(this._seek>250){ this._seek=0; 
+        const nearUnit = this.scene.findNearestEnemyUnit(this.x, this.y, this.isPlayer, 160);
+        if(nearUnit){ this.attack(nearUnit); }
+        else if((!hasDamage(this.target) || this.target.dead) && this.type!=='worker'){
+          const enemyAny = this.scene.findNearestEnemyAny(this.x, this.y, this.isPlayer, 220);
+          if(enemyAny) this.attack(enemyAny);
+        }
+      }
+      // integrate position
+      this.x += this.vx*dt/1000; this.y += this.vy*dt/1000;
+      this.text.setPosition(this.x, this.y); this.drawRing(); this.updateHpBar();
+    }
+    _goTo(tx,ty,dt){ const dx=tx-this.x, dy=ty-this.y; const d=Math.hypot(dx,dy); if(d<6){ this.vx=this.vy=0; return; } const nx=dx/d, ny=dy/d; this.vx=nx*this.speed; this.vy=ny*this.speed; }
+    _attackTick(dt, target){ this._cd -= dt; if(this._cd>0) return; this._cd=this.cooldown; if(!hasDamage(target)) { this.order=null; this.target=null; return; } target.damage(this.atk); if(typeof target.x === 'number' && typeof target.y === 'number') this.scene.spawnHit(target.x, target.y); }
+  }
+
+  // --- Phaser Scene ---
+  class MainScene extends Phaser.Scene {
+    constructor(){ super('main'); this.units=[]; this.minerals=[]; this.enemyUnits=[]; }
+    preload(){ /* no assets, emojis only */ }
+    create(){
+      this.cameras.main.setBounds(0,0,MAP_W,MAP_H);
+      this.add.rectangle(MAP_W/2, MAP_H/2, MAP_W, MAP_H, 0x0b1130).setDepth(0);
+      // grid
+      const g = this.add.graphics().setDepth(0);
+      g.lineStyle(1, 0x18214a, 1);
+      for(let x=0;x<MAP_W;x+=200){ g.lineBetween(x,0,x,MAP_H); }
+      for(let y=0;y<MAP_H;y+=200){ g.lineBetween(0,y,MAP_W,y); }
+
+      // Bases
+      this.playerBase = new Base(this, 220, MAP_H/2, true); this.playerBase.base=true;
+      this.enemyBase  = new Base(this, MAP_W-220, MAP_H/2, false); this.enemyBase.base=true;
+
+      // Camera initiale : léger dé-zoom + centrage
+      const cam = this.cameras.main; cam.setZoom(0.9); cam.centerOn(MAP_W/2, MAP_H/2);
+
+      // Minerals field
+      for(let i=0;i<8;i++){
+        const x = 540 + (i%4)*140 + (Math.random()*30-15);
+        const y = MAP_H/2 - 140 + Math.floor(i/4)*140 + (Math.random()*30-15);
+        this.minerals.push(new Mineral(this,x,y, 400+Math.floor(Math.random()*200)));
+      }
+
+      // Starting units
+      this.playerMinerals = 100; this.updateHud();
+      for(let i=0;i<3;i++) this.spawnUnit(true,'worker', this.playerBase.x+60+i*28, this.playerBase.y+40);
+
+      // Input & selection
+      this.selected = []; this.selG = this.add.graphics().setDepth(10); this.dragSel=null;
+      this.input.on('pointerdown', (p)=>{
+        const world = this.toWorld(p);
+        if(p.leftButtonDown()){
+          this.dragSel = {x:world.x, y:world.y};
+        }
+      });
+      this.input.on('pointerup', (p)=>{
+        const world = this.toWorld(p);
+        if(p.leftButtonReleased()){
+          if(this.dragSel){ // box select
+            const r = new Phaser.Geom.Rectangle(Math.min(this.dragSel.x,world.x), Math.min(this.dragSel.y,world.y), Math.abs(this.dragSel.x-world.x), Math.abs(this.dragSel.y-world.y));
+            this.clearSelection();
+            this.units.filter(u=>u.isPlayer && !u.dead && Phaser.Geom.Rectangle.Contains(r,u.x,u.y)).forEach(u=>{u.setSelected(true); this.selected.push(u);});
+            if(this.selected.length===0){ // try click select near
+              const u = this.pickUnit(world.x, world.y, true);
+              if(u){ u.setSelected(true); this.selected=[u]; }
+            }
+            this.selG.clear(); this.dragSel=null;
+          }
+        } else if(p.rightButtonReleased()){
+          this.handleRightClick(world);
+        }
+      });
+      this.input.on('pointermove', (p)=>{
+        if(this.dragSel){ const world = this.toWorld(p); this.drawSelectionRect(this.dragSel.x, this.dragSel.y, world.x, world.y); }
+      });
+
+      // Camera keys (ZQSD)
+      this.keys = this.input.keyboard.addKeys({Z:'Z',Q:'Q',S:'S',D:'D', W:'W', B:'B'});
+      this.input.keyboard.on('keydown-W', ()=>tryBuy('worker'));
+      this.input.keyboard.on('keydown-S', ()=>tryBuy('soldier'));
+      this.input.keyboard.on('keydown-B', ()=>tryBuy('shield'));
+
+      // Zoom wheel
+      this.input.on('wheel', (pointer, objs, dx, dy)=>{ const cam=this.cameras.main; const z=Phaser.Math.Clamp(cam.zoom - dy*0.001, 0.6, 1.8); cam.setZoom(z); });
+
+      // UI buttons
+      $('#btnWorker').onclick = ()=> tryBuy('worker');
+      $('#btnSoldier').onclick = ()=> tryBuy('soldier');
+      $('#btnShield').onclick  = ()=> tryBuy('shield');
+      $('#btnRally').onclick = ()=> { this.playerBase.rally = new Phaser.Math.Vector2(this.cameras.main.midPoint.x, this.cameras.main.midPoint.y); ui.showToast('📍 Point de ralliement défini'); };
+
+      const tryBuy = (kind)=>{
+        const cost = COSTS[kind];
+        if(this.playerMinerals < cost){ ui.showToast('Pas assez de 💎'); return; }
+        this.playerMinerals -= cost; this.updateHud();
+        const spawnX=this.playerBase.x+Phaser.Math.Between(20,40), spawnY=this.playerBase.y+Phaser.Math.Between(-30,30);
+        const u = this.spawnUnit(true, kind, spawnX, spawnY);
+        // send to rally
+        if(this.playerBase.rally) u.moveTo(this.playerBase.rally.x, this.playerBase.rally.y);
+      };
+
+      // Enemy AI: waves
+      this.time.addEvent({ delay: 18000, loop:true, callback: ()=> this.spawnEnemyWave() });
+      this.spawnEnemyWave();
+
+      // ---- Minimal self-tests (run once, non-blocking) ----
+      this.time.delayedCall(150, ()=> runSelfTests(this));
+    }
+
+    update(t, dt){
+      // Camera move
+      const cam=this.cameras.main; const sp=400*dt/1000; if(this.keys.Z.isDown) cam.scrollY -= sp; if(this.keys.S.isDown) cam.scrollY += sp; if(this.keys.Q.isDown) cam.scrollX -= sp; if(this.keys.D.isDown) cam.scrollX += sp;
+      // Units update
+      this.units.forEach(u=>u.update(dt));
+      this.enemyUnits.forEach(u=>u.update(dt));
+      // cleanup
+      this.units = this.units.filter(u=>!u.dead);
+      this.enemyUnits = this.enemyUnits.filter(u=>!u.dead);
+      this.minerals = this.minerals.filter(m=>!m.dead);
+      // HUD counts
+      ui.workers.textContent = this.units.filter(u=>u.type==='worker').length;
+      ui.soldiers.textContent = this.units.filter(u=>u.type==='soldier').length;
+      ui.shields.textContent  = this.units.filter(u=>u.type==='shield').length;
+    }
+
+    toWorld(p){ return this.cameras.main.getWorldPoint(p.x,p.y); }
+    drawSelectionRect(x1,y1,x2,y2){ this.selG.clear(); this.selG.lineStyle(1,0x7c9cff,1).strokeRect(Math.min(x1,x2),Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1)); }
+    clearSelection(){ this.selected.forEach(u=>u.setSelected(false)); this.selected=[]; }
+    pickUnit(x,y, onlyPlayer){ const list = onlyPlayer?this.units:this.units.concat(this.enemyUnits); let best=null, bd=22; for(const u of list){ if(u.dead) continue; const d=Phaser.Math.Distance.Between(x,y,u.x,u.y); if(d<bd){ bd=d; best=u; } } return best; }
+
+    // NEW: pick explicit enemy under cursor using team info
+    enemyUnderCursor(x, y, forPlayer, radius=44){
+      const list = forPlayer ? this.enemyUnits : this.units; // opposite team
+      let best=null, bd=radius;
+      for(const e of list){ if(e.dead) continue; const d=Phaser.Math.Distance.Between(x,y,e.x,e.y); if(d<bd){ bd=d; best=e; } }
+      return best;
+    }
+
+    handleRightClick(world){
+      if(this.selected.length===0) return;
+      // 1) Unité ennemie sous le curseur (via helper fiable)
+      const enemyUnder = this.enemyUnderCursor(world.x, world.y, true, 44);
+      if(hasDamage(enemyUnder)){ this.selected.forEach(u=>u.attack(enemyUnder)); ui.showToast('🎯 Attaquer'); return; }
+      // 2) Base ennemie si cliquée
+      if(Phaser.Math.Distance.Between(world.x,world.y,this.enemyBase.x,this.enemyBase.y)<50){ this.selected.forEach(u=>u.attack(this.enemyBase)); ui.showToast('🎯 Attaquer base'); return; }
+      // 3) Minerais
+      const mineral = this.minerals.find(m=>Phaser.Math.Distance.Between(world.x,world.y,m.x,m.y)<24);
+      if(mineral){ this.selected.filter(u=>u.type==='worker').forEach(u=>u.harvest(mineral)); ui.showToast('⛏️ Miner'); if(this.selected.some(u=>u.type==='worker')) return; }
+      // 4) Mouvement
+      this.selected.forEach((u,i)=>{ const spread= (i%5)*8; u.moveTo(world.x+((i%3)-1)*spread, world.y+Math.floor(i/3)*6); });
+    }
+
+    addMinerals(n){ this.playerMinerals += n; this.updateHud(); }
+    updateHud(){ ui.res.textContent = this.playerMinerals; }
+
+    spawnUnit(isPlayer, kind, x, y){
+      const cfg = kind==='worker' ? {type:'worker', isPlayer, speed:95, range:26, atk:5, cooldown:600, hp:70, maxHp:70}
+                : kind==='shield' ? {type:'shield', isPlayer, speed:90, range:40, atk:6, cooldown:450, hp:220, maxHp:220}
+                : {type:'soldier', isPlayer, speed:120, range:64, atk:14, cooldown:400, hp:110, maxHp:110};
+      const u = new Unit(this, x, y, cfg); (isPlayer?this.units:this.enemyUnits).push(u); return u;
+    }
+
+    spawnHit(x,y){ const t=this.add.text(x,y,'💥',{fontSize:18}).setOrigin(0.5).setDepth(9); this.tweens.add({ targets:t, y:y-10, alpha:0, duration:300, onComplete:()=>t.destroy()}); }
+
+    spawnEnemyWave(){
+      const s = this.spawnUnit(
+        false, 'soldier',
+        this.enemyBase.x - 60 + Phaser.Math.Between(-10,10),
+        this.enemyBase.y + Phaser.Math.Between(-30,30)
+      );
+      s.attack(this.playerBase);
+    }
+
+    // Helpers de ciblage
+    findNearestEnemyUnit(x,y, isForPlayer, within=Infinity){
+      const list = (isForPlayer? this.enemyUnits : this.units).filter(e=>hasDamage(e));
+      let best=null, bd=within; for(const e of list){ if(e.dead) continue; const d=Phaser.Math.Distance.Between(x,y,e.x,e.y); if(d<bd){ bd=d; best=e; }} return best;
+    }
+    findNearestEnemyAny(x,y, isForPlayer, within=Infinity){
+      const listUnits = (isForPlayer? this.enemyUnits : this.units).filter(e=>hasDamage(e));
+      const base = isForPlayer? this.enemyBase : this.playerBase;
+      const list = listUnits.concat(hasDamage(base)?[base]:[]);
+      let best=null, bd=within; for(const e of list){ if(e.dead) continue; const d=Phaser.Math.Distance.Between(x,y,e.x,e.y); if(d<bd){ bd=d; best=e; }} return best;
+    }
+
+    onBaseDestroyed(base){
+      if(base.isPlayer){ ui.showToast('Défaite… 😵', 3000); this.scene.pause(); this.time.delayedCall(50,()=>alert('Défaite… Votre base a été détruite.')); }
+      else { ui.showToast('Victoire ! 🎉', 3000); this.scene.pause(); this.time.delayedCall(50,()=>alert('Victoire ! Vous avez détruit la base ennemie.')); }
+    }
+  }
+
+  // ---- Tiny self-test suite (console) ----
+  function runSelfTests(scene){
+    const results = [];
+    const t = (name, fn)=>{ try{ fn(); console.log('✅', name); results.push({name, ok:true}); } catch(e){ console.error('❌', name, e); results.push({name, ok:false, e}); } };
+
+    const u = new Unit(scene, -999, -999, {isPlayer:true});
+    t('Unit.prototype.damage is a function', ()=>{ if(typeof u.damage !== 'function') throw new Error('damage() not a function'); });
+    t('Unit._attackTick ignores null target', ()=>{ u._attackTick(1000, null); });
+    t('Unit.attack ignores plain object', ()=>{ u.attack({}); u._attackTick(1000, {}); });
+    const b = new Base(scene, -960, -999, false); const hp=b.hp; b.damage(0);
+    t('Base.damage reduces HP', ()=>{ b.damage(10); if(b.hp !== hp-10) throw new Error('HP not reduced correctly'); });
+
+    const sld = new Unit(scene, -900, -999, {type:'soldier', isPlayer:true, speed:120, range:64, atk:14, cooldown:400, hp:110, maxHp:110});
+    const shd = new Unit(scene, -880, -999, {type:'shield', isPlayer:true, speed:90, range:40, atk:6, cooldown:450, hp:220, maxHp:220});
+    t('Shield >HP & <ATK vs Soldier', ()=>{ if(!(shd.maxHp> sld.maxHp && shd.atk < sld.atk)) throw new Error('Shield stats invalid'); });
+    t('Soldier attack tick reduces enemy HP', ()=>{ const before=shd.hp; sld._attackTick(1000, shd); if(!(shd.hp < before)) throw new Error('Attack did not apply damage'); });
+
+    // cleanup
+    u.destroy(); b.text.destroy(); b.hpBar.destroy(); sld.destroy(); shd.destroy();
+
+    const failed = results.filter(r=>!r.ok).length;
+    ui.showToast(failed?`Tests échoués (${failed}) — voir console`:`Tests OK (${results.length})`);
+  }
+
+  const game = new Phaser.Game({ type: Phaser.AUTO, width: window.innerWidth, height: window.innerHeight, backgroundColor:'#0e1220', parent: document.body, scene:[MainScene] });
+  window.addEventListener('resize', ()=> game.scale.resize(window.innerWidth, window.innerHeight));
+  </script>
+</body>
+</html>
