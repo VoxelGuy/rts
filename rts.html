@@ -31,7 +31,7 @@
     .help { position:absolute; left:12px; bottom:12px; max-width:520px; line-height:1.45; background:var(--panel); border:1px solid #2a3560; border-radius:14px; padding:10px 12px; pointer-events:auto; color:var(--muted); font-size:14px; }
     .help b { color:var(--text); }
 
-    .toast { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:#111835ee; backdrop-filter: blur(8px); border:1px solid #2a3560; border-radius:20px; padding:18px 22px; font-size:22px; font-weight:800; letter-spacing:.3px; display:none; text-align:center; box-shadow:0 40px 80px #000a; }
+    .toast { position:absolute; top:16px; left:50%; transform:translateX(-50%); background:#111835ee; backdrop-filter: blur(8px); border:1px solid #2a3560; border-radius:20px; padding:18px 22px; font-size:22px; font-weight:800; letter-spacing:.3px; display:none; text-align:center; box-shadow:0 40px 80px #000a; }
 
     canvas { outline:none; display:block; }
   </style>
@@ -95,6 +95,7 @@
     constructor(scene, x, y, isPlayer){
       this.scene=scene; this.x=x; this.y=y; this.isPlayer=isPlayer; this.maxHp=1000; this.hp=this.maxHp; this.dead=false; this.base=true;
       const emoji = isPlayer ? '🏭' : '🏰';
+      this.teamCircle = scene.add.circle(x, y, 28, isPlayer?0x4477ff:0xff5555, 0.25).setDepth(0);
       this.text = scene.add.text(x, y, emoji, { fontSize: 48 }).setOrigin(0.5).setDepth(1);
       this.hpBar = scene.add.graphics().setDepth(2);
       this.updateHpBar();
@@ -107,7 +108,7 @@
       this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b, 1).fillRoundedRect(this.x-30, this.y+34, 60*pct, 8, 3);
       if(this.isPlayer && this === this.scene.playerBase) ui.basehp.textContent = Math.round(pct*100);
     }
-    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0 && !this.dead){ this.dead=true; this.text.setText('💥'); this.scene.onBaseDestroyed(this); } }
+    damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0 && !this.dead){ this.dead=true; this.text.setText('💥'); if(this.teamCircle) this.teamCircle.setVisible(false); this.scene.onBaseDestroyed(this); } }
   }
 
   class Unit {
@@ -116,6 +117,7 @@
       this.vx=0; this.vy=0; this.order=null; this.target=null; this.carry=0; this.cap=20; this.gathering=false; this._cd=0; this._seek=0;
       const emojiMap = { worker:'👷', soldier:'🗡️', shield:'🧱' };
       const fs = this.type==='soldier' ? 30 : 28;
+      this.teamCircle = scene.add.circle(x, y, 14, this.isPlayer?0x4477ff:0xff5555, 0.25).setDepth(1);
       this.text = scene.add.text(x, y, emojiMap[this.type]||'🙂', { fontSize: fs }).setOrigin(0.5).setDepth(3);
       if(this.type==='worker'){
         this.carryText = scene.add.text(x, y-18, '', {fontSize:18}).setOrigin(0.5).setDepth(4);
@@ -127,9 +129,9 @@
     drawRing(){ this.selRing.clear(); if(!this.selected) return; this.selRing.lineStyle(2, 0x7c9cff, 1).strokeCircle(this.x, this.y, 18); }
     updateHpBar(){ const pct = Math.max(0, this.hp/this.maxHp); this.hpBar.clear(); this.hpBar.fillStyle(0x000000,0.7).fillRect(this.x-16,this.y+18,32,5); this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b).fillRect(this.x-16,this.y+18,32*pct,5); }
     damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0) this.destroy(); }
-    destroy(){ this.text.destroy(); if(this.carryText) this.carryText.destroy(); this.selRing.destroy(); this.hpBar.destroy(); this.dead=true; }
+    destroy(){ this.text.destroy(); if(this.carryText) this.carryText.destroy(); this.selRing.destroy(); this.hpBar.destroy(); if(this.teamCircle) this.teamCircle.destroy(); this.dead=true; }
     moveTo(tx, ty){ this.order={kind:'move', x:tx, y:ty}; this.target=null; this.gathering=false; }
-    attack(t){ if(!hasDamage(t)){ this.order=null; this.target=null; return; } this.order={kind:'attack'}; this.target=t; this.gathering=false; }
+    attack(t, manual=false){ if(!hasDamage(t)){ this.order=null; this.target=null; return; } this.order={kind:'attack', manual}; this.target=t; this.gathering=false; }
     harvest(mineral){ if(this.type!=='worker') return; this.order={kind:'harvest', m:mineral}; this.target=null; this.gathering=false; }
     update(dt){ if(this.dead) return; const s=this;
       // move / pursue
@@ -158,20 +160,24 @@
           }
         }
       }
-      // auto-acquire / retargeting — disabled during move orders
+      // auto-acquire / retargeting — disabled during move or manual attack orders
       this._seek += dt; if(this._seek>250){ this._seek=0;
-        if(!this.order || this.order.kind!=='move'){
-          const nearUnit = this.scene.findNearestEnemyUnit(this.x, this.y, this.isPlayer, 120);
-          if(nearUnit){ this.attack(nearUnit); }
-          else if((!hasDamage(this.target) || this.target.dead) && this.type!=='worker'){
-            const enemyAny = this.scene.findNearestEnemyAny(this.x, this.y, this.isPlayer);
-            if(enemyAny) this.attack(enemyAny);
+        const manual = this.order && this.order.kind==='attack' && this.order.manual && hasDamage(this.target) && !this.target.dead;
+        if(!manual && (!this.order || this.order.kind!=='move')){
+          if(this.type!=='worker'){
+            const nearUnit = this.scene.findNearestEnemyUnit(this.x, this.y, this.isPlayer, 120);
+            if(nearUnit){ this.attack(nearUnit); }
+            else if(!hasDamage(this.target) || this.target.dead){
+              const enemyAny = this.scene.findNearestEnemyAny(this.x, this.y, this.isPlayer);
+              if(enemyAny) this.attack(enemyAny);
+            }
           }
         }
       }
       // integrate position
       this.x += this.vx*dt/1000; this.y += this.vy*dt/1000;
       this.text.setPosition(this.x, this.y);
+      if(this.teamCircle) this.teamCircle.setPosition(this.x, this.y);
       if(this.carryText){ this.carryText.setPosition(this.x, this.y-18); this.carryText.setText(this.carry>0?'💎':''); }
       this.drawRing(); this.updateHpBar();
     }
@@ -336,10 +342,10 @@
       if(this.selected.length===0) return;
       // 1) Unité ennemie sous le curseur (via helper fiable)
       const enemyUnder = this.enemyUnderCursor(world.x, world.y, true, 44);
-      if(hasDamage(enemyUnder)){ this.selected.forEach(u=>u.attack(enemyUnder)); ui.showToast('🎯 Attaquer'); return; }
+      if(hasDamage(enemyUnder)){ this.selected.forEach(u=>u.attack(enemyUnder, true)); ui.showToast('🎯 Attaquer'); return; }
       // 2) Base ennemie si cliquée
       const baseClicked = this.enemyBases.find(b=>!b.dead && Phaser.Math.Distance.Between(world.x,world.y,b.x,b.y)<50);
-      if(baseClicked){ this.selected.forEach(u=>u.attack(baseClicked)); ui.showToast('🎯 Attaquer base'); return; }
+      if(baseClicked){ this.selected.forEach(u=>u.attack(baseClicked, true)); ui.showToast('🎯 Attaquer base'); return; }
       // 3) Minerais
       const mineral = this.minerals.find(m=>Phaser.Math.Distance.Between(world.x,world.y,m.x,m.y)<24);
       if(mineral){ this.selected.filter(u=>u.type==='worker').forEach(u=>u.harvest(mineral)); ui.showToast('⛏️ Miner'); if(this.selected.some(u=>u.type==='worker')) return; }
