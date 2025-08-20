@@ -117,6 +117,9 @@
       const emojiMap = { worker:'👷', soldier:'🗡️', shield:'🧱' };
       const fs = this.type==='soldier' ? 30 : 28;
       this.text = scene.add.text(x, y, emojiMap[this.type]||'🙂', { fontSize: fs }).setOrigin(0.5).setDepth(3);
+      if(this.type==='worker'){
+        this.carryText = scene.add.text(x, y-18, '', {fontSize:18}).setOrigin(0.5).setDepth(4);
+      }
       this.selRing = scene.add.graphics().setDepth(2); this.selected=false; this.setSelected(false);
       this.hpBar = scene.add.graphics().setDepth(2); this.updateHpBar();
     }
@@ -124,7 +127,7 @@
     drawRing(){ this.selRing.clear(); if(!this.selected) return; this.selRing.lineStyle(2, 0x7c9cff, 1).strokeCircle(this.x, this.y, 18); }
     updateHpBar(){ const pct = Math.max(0, this.hp/this.maxHp); this.hpBar.clear(); this.hpBar.fillStyle(0x000000,0.7).fillRect(this.x-16,this.y+18,32,5); this.hpBar.fillStyle(pct>0.5?0x19d4a6:pct>0.25?0xffb020:0xff6b6b).fillRect(this.x-16,this.y+18,32*pct,5); }
     damage(d){ this.hp=Math.max(0,this.hp-d); this.updateHpBar(); if(this.hp<=0) this.destroy(); }
-    destroy(){ this.text.destroy(); this.selRing.destroy(); this.hpBar.destroy(); this.dead=true; }
+    destroy(){ this.text.destroy(); if(this.carryText) this.carryText.destroy(); this.selRing.destroy(); this.hpBar.destroy(); this.dead=true; }
     moveTo(tx, ty){ this.order={kind:'move', x:tx, y:ty}; this.target=null; this.gathering=false; }
     attack(t){ if(!hasDamage(t)){ this.order=null; this.target=null; return; } this.order={kind:'attack'}; this.target=t; this.gathering=false; }
     harvest(mineral){ if(this.type!=='worker') return; this.order={kind:'harvest', m:mineral}; this.target=null; this.gathering=false; }
@@ -168,7 +171,9 @@
       }
       // integrate position
       this.x += this.vx*dt/1000; this.y += this.vy*dt/1000;
-      this.text.setPosition(this.x, this.y); this.drawRing(); this.updateHpBar();
+      this.text.setPosition(this.x, this.y);
+      if(this.carryText){ this.carryText.setPosition(this.x, this.y-18); this.carryText.setText(this.carry>0?'💎':''); }
+      this.drawRing(); this.updateHpBar();
     }
     _goTo(tx,ty,dt){ const dx=tx-this.x, dy=ty-this.y; const d=Math.hypot(dx,dy); if(d<6){ this.vx=this.vy=0; return; } const nx=dx/d, ny=dy/d; this.vx=nx*this.speed; this.vy=ny*this.speed; }
     _attackTick(dt, target){ this._cd -= dt; if(this._cd>0) return; this._cd=this.cooldown; if(!hasDamage(target)) { this.order=null; this.target=null; return; } target.damage(this.atk); if(typeof target.x === 'number' && typeof target.y === 'number') this.scene.spawnHit(target.x, target.y); }
@@ -205,15 +210,15 @@
       // Camera initiale : léger dé-zoom + centrage
       const cam = this.cameras.main; cam.setZoom(0.9); cam.centerOn(MAP_W/2, MAP_H/2);
 
-      // Minerals field (3 top, 3 bottom - fixed positions)
+      // Minerals field (3 top, 3 bottom - fixed positions closer to center)
       const mineralPos = [
-        [MAP_W/2 - 200, 200], [MAP_W/2, 200], [MAP_W/2 + 200, 200],
-        [MAP_W/2 - 200, MAP_H - 200], [MAP_W/2, MAP_H - 200], [MAP_W/2 + 200, MAP_H - 200]
+        [MAP_W/2 - 200, MAP_H/2 - 300], [MAP_W/2, MAP_H/2 - 300], [MAP_W/2 + 200, MAP_H/2 - 300],
+        [MAP_W/2 - 200, MAP_H/2 + 300], [MAP_W/2, MAP_H/2 + 300], [MAP_W/2 + 200, MAP_H/2 + 300]
       ];
       mineralPos.forEach(([x,y])=> this.minerals.push(new Mineral(this,x,y,500)));
 
       // Starting units
-      this.playerMinerals = 200; this.updateHud();
+      this.playerMinerals = 300; this.updateHud();
       for(let i=0;i<3;i++) this.spawnUnit(true,'worker', this.playerBase.x+60+i*28, this.playerBase.y+40);
 
       // Input & selection
@@ -271,8 +276,8 @@
         if(this.playerBase.rally) u.moveTo(this.playerBase.rally.x, this.playerBase.rally.y);
       };
 
-      // Enemy AI: waves
-      this.time.addEvent({ delay: 15000, loop:true, callback: ()=> this.spawnEnemyWave() });
+      // Enemy AI: waves (less frequent)
+      this.time.addEvent({ delay: 22000, loop:true, callback: ()=> this.spawnEnemyWave() });
       this.spawnEnemyWave();
 
       // ---- Minimal self-tests (run once, non-blocking) ----
@@ -347,7 +352,7 @@
 
     spawnUnit(isPlayer, kind, x, y){
       const cfg = kind==='worker' ? {type:'worker', isPlayer, speed:95, range:22, atk:5, cooldown:600, hp:70, maxHp:70}
-                : kind==='shield' ? {type:'shield', isPlayer, speed:90, range:32, atk:6, cooldown:450, hp:220, maxHp:220}
+                : kind==='shield' ? {type:'shield', isPlayer, speed:90, range:32, atk:4, cooldown:450, hp:600, maxHp:600}
                 : {type:'soldier', isPlayer, speed:120, range:48, atk:14, cooldown:400, hp:110, maxHp:110};
       const u = new Unit(this, x, y, cfg); (isPlayer?this.units:this.enemyUnits).push(u); return u;
     }
@@ -356,9 +361,10 @@
 
     spawnEnemyWave(){
       const spawnBase = this.enemyBases[Phaser.Math.Between(0, this.enemyBases.length-1)];
-      for(let i=0;i<2;i++){
+      const kinds = ['soldier','shield'];
+      kinds.forEach(kind=>{
         const s = this.spawnUnit(
-          false, 'soldier',
+          false, kind,
           spawnBase.x - 60 + Phaser.Math.Between(-10,10),
           spawnBase.y + Phaser.Math.Between(-30,30)
         );
@@ -367,7 +373,7 @@
           const tgt = targets[Phaser.Math.Between(0, targets.length-1)];
           s.attack(tgt);
         }
-      }
+      });
     }
 
     // Helpers de ciblage
@@ -405,7 +411,7 @@
     t('Base.damage reduces HP', ()=>{ b.damage(10); if(b.hp !== hp-10) throw new Error('HP not reduced correctly'); });
 
     const sld = new Unit(scene, -900, -999, {type:'soldier', isPlayer:true, speed:120, range:64, atk:14, cooldown:400, hp:110, maxHp:110});
-    const shd = new Unit(scene, -880, -999, {type:'shield', isPlayer:true, speed:90, range:40, atk:6, cooldown:450, hp:220, maxHp:220});
+    const shd = new Unit(scene, -880, -999, {type:'shield', isPlayer:true, speed:90, range:40, atk:4, cooldown:450, hp:600, maxHp:600});
     t('Shield >HP & <ATK vs Soldier', ()=>{ if(!(shd.maxHp> sld.maxHp && shd.atk < sld.atk)) throw new Error('Shield stats invalid'); });
     t('Soldier attack tick reduces enemy HP', ()=>{ const before=shd.hp; sld._attackTick(1000, shd); if(!(shd.hp < before)) throw new Error('Attack did not apply damage'); });
 
